@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fragmenta/query/adapters"
+	"github.com/freska-cms/query/adapters"
 )
 
 // database is the package global db  - this reference is not exported outside the package.
