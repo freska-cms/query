@@ -395,7 +395,7 @@ func BenchmarkPQSpeed(t *testing.B) {
 	fmt.Println("\n---\nSpeed testing PSQL\n---")
 
 	for i := 0; i < 100000; i++ {
-		// ok  	github.com/fragmenta/query	20.238s
+		// ok  	github.com/freska/query	20.238s
 
 		var models []*Page
 		q := PagesQuery().Select("SELECT id,title from pages").Where("id < i").Order("id asc")
@@ -404,7 +404,7 @@ func BenchmarkPQSpeed(t *testing.B) {
 
 		}
 
-		// ok  	github.com/fragmenta/query	21.680s
+		// ok  	github.com/freska/query	21.680s
 		q = PagesQuery().Select("SELECT id,title from pages").Where("id < i").Order("id asc")
 		r, err := q.Results()
 		if err != nil && r != nil {
