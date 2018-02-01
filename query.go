@@ -59,6 +59,7 @@ type Txn struct {
 	Id string
 	Data map[string]string
 }
+
 // New builds a new Query, given the table and primary key
 func New(t string, pk string) *Query {
 
@@ -389,7 +390,6 @@ func (q *Query) Results() ([]Result, error) {
 	rows, err := q.Rows()
 
 	if err != nil {
-		fmt.Println("error : ", err.Error())
 		return results, fmt.Errorf("Error querying database for rows: %s\nQUERY:%s", err, q)
 	}
 
@@ -824,18 +824,16 @@ func scanRow(cols []string, rows *sql.Rows) (Result, error) {
 
 	return result, nil
 }
+
 func (q *Query) UpdateTransaction(resources []Txn) (err error) {
 
 	txn, err := database.SQLDB().Begin()
 	if err != nil{
 		return err
 	}
-	var index int
-	index = 1
-	var finalStatment string
-	finalStatment = "with "
+	index := 1
+	finalStatment := "with "
 	var finalParams []interface{}
-
 
 	for i, resource := range resources {
 
@@ -877,9 +875,9 @@ func (q *Query) UpdateTransaction(resources []Txn) (err error) {
 //used to handle any transaction error
 func transactionError(err error,txn *sql.Tx )error{
 	txn.Rollback();
-	fmt.Println(" Error : ", err.Error())
 	return err
 }
+
 // Used for update statements, turn params into sql i.e. "col"=$1
 func querySQLTxn(params map[string]string, index int) (string,int) {
 	var output []string
@@ -891,6 +889,7 @@ func querySQLTxn(params map[string]string, index int) (string,int) {
 	}
 	return strings.Join(output, ","), index
 }
+
 func insertSQLTxn(params map[string]string, index int ) ([]string, []string, int) {
 	var cols, vals []string
 
@@ -901,6 +900,7 @@ func insertSQLTxn(params map[string]string, index int ) ([]string, []string, int
 	}
 	return cols, vals, index
 }
+
 //In format -> "with d as (sql1), b as (sql2) sql3;"
 func creatingSingleCommand(i int, sql string , resources []Txn, finalStatment string)string{
 	var r *rand.Rand
@@ -931,6 +931,7 @@ func (tx Txn) insertSql(index int ) (string, int) {
 	stmtF := fmt.Sprintf(txt, tx.TableName, strings.Join(cols, ","), strings.Join(vals, ","))
 	return stmtF, finalINdex
 }
+
 func (tx Txn) updateSql(index int) (string, int){
 	primarykey := "id"
 	txt := "UPDATE %s SET "
@@ -947,6 +948,7 @@ func (tx Txn) updateSql(index int) (string, int){
 	stmtF := fmt.Sprintf("%s %s ", stmt, where)
 	return stmtF, finalIndex
 }
+
 func (tx Txn) deleteSql(index int) (string,int) {
 	primarykey := "id"
 	txt := "DELETE FROM %s"
