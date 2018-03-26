@@ -54,12 +54,16 @@ type Query struct {
 }
 
 type Txn struct {
-	Operation string
-	TableName string
-	Id string
-	Data map[string]string
+	operation string
+	tableName string
+	id string
+	data map[string]interface{}
 }
 
+func NewTxn(operation string, tableName string, id string, data map[string]interface{})Txn{
+	return Txn{operation:operation, tableName:tableName, id:id, data:data }
+
+}
 // New builds a new Query, given the table and primary key
 func New(t string, pk string) *Query {
 
@@ -180,7 +184,7 @@ func (q *Query) UpdateJoins(id int64, a []int64, b []int64) error {
 }
 
 // Insert inserts a record in the database
-func (q *Query) Insert(params map[string]string) (int64, error) {
+func (q *Query) Insert(params map[string]interface{}) (int64, error) {
 
 	// Insert and retrieve ID in one step from db
 	sql := q.insertSQL(params)
@@ -199,7 +203,7 @@ func (q *Query) Insert(params map[string]string) (int64, error) {
 
 // insertSQL sets the insert sql for update statements, turn params into sql i.e. "col"=?
 // NB we always use parameterized queries, never string values.
-func (q *Query) insertSQL(params map[string]string) string {
+func (q *Query) insertSQL(params map[string]interface{}) string {
 	var cols, vals []string
 
 	for i, k := range sortedParamKeys(params) {
@@ -212,7 +216,7 @@ func (q *Query) insertSQL(params map[string]string) string {
 }
 
 // Update one model specified in this query - the column names MUST be verified in the model
-func (q *Query) Update(params map[string]string) error {
+func (q *Query) Update(params map[string]interface{}) error {
 	// We should check the query has a where limitation to avoid updating all?
 	// pq unfortunately does not accept limit(1) here
 	return q.UpdateAll(params)
@@ -225,7 +229,7 @@ func (q *Query) Delete() error {
 }
 
 // UpdateAll updates all models specified in this relation
-func (q *Query) UpdateAll(params map[string]string) error {
+func (q *Query) UpdateAll(params map[string]interface{}) error {
 	// Create sql for update from ALL params
 	q.Select(fmt.Sprintf("UPDATE %s SET %s", q.table(), querySQL(params)))
 
@@ -390,6 +394,7 @@ func (q *Query) Results() ([]Result, error) {
 	rows, err := q.Rows()
 
 	if err != nil {
+		fmt.Println("error : ", err.Error())
 		return results, fmt.Errorf("Error querying database for rows: %s\nQUERY:%s", err, q)
 	}
 
@@ -733,7 +738,7 @@ func (q *Query) replaceArgPlaceholders() {
 
 // Sorts the param names given - map iteration order is explicitly random in Go
 // but we need params in a defined order to avoid unexpected results.
-func sortedParamKeys(params map[string]string) []string {
+func sortedParamKeys(params map[string]interface{}) []string {
 	sortedKeys := make([]string, len(params))
 	i := 0
 	for k := range params {
@@ -746,7 +751,7 @@ func sortedParamKeys(params map[string]string) []string {
 }
 
 // Generate a set of values for the params in order
-func valuesFromParams(params map[string]string) []interface{} {
+func valuesFromParams(params map[string]interface{}) []interface{} {
 
 	// NB DO NOT DEPEND ON PARAMS ORDER - see note on SortedParamKeys
 	var values []interface{}
@@ -757,7 +762,7 @@ func valuesFromParams(params map[string]string) []interface{} {
 }
 
 // Used for update statements, turn params into sql i.e. "col"=?
-func querySQL(params map[string]string) string {
+func querySQL(params map[string]interface{}) string {
 	var output []string
 	for _, k := range sortedParamKeys(params) {
 		output = append(output, fmt.Sprintf("%s=?", database.QuoteField(k)))
@@ -824,23 +829,25 @@ func scanRow(cols []string, rows *sql.Rows) (Result, error) {
 
 	return result, nil
 }
-
 func (q *Query) UpdateTransaction(resources []Txn) (err error) {
 
 	txn, err := database.SQLDB().Begin()
 	if err != nil{
 		return err
 	}
-	index := 1
-	finalStatment := "with "
+	var index int
+	index = 1
+	var finalStatment string
+	finalStatment = "with "
 	var finalParams []interface{}
+
 
 	for i, resource := range resources {
 
 		var params []interface{}
 		var sql string
 
-		operation := resource.Operation
+		operation := resource.operation
 		//Generate sql comman
 		if operation == "update"{
 			sql, index = resource.updateSql(index)
@@ -856,7 +863,7 @@ func (q *Query) UpdateTransaction(resources []Txn) (err error) {
 		}else {
 			finalStatment = fmt.Sprintf("%s%s", sql, ";")
 		}
-		params = append(valuesFromParams(resource.Data), params...)
+		params = append(valuesFromParams(resource.data), params...)
 		finalParams =append(finalParams, params...)
 
 	}
@@ -875,11 +882,11 @@ func (q *Query) UpdateTransaction(resources []Txn) (err error) {
 //used to handle any transaction error
 func transactionError(err error,txn *sql.Tx )error{
 	txn.Rollback();
+	fmt.Println(" Error : ", err.Error())
 	return err
 }
-
 // Used for update statements, turn params into sql i.e. "col"=$1
-func querySQLTxn(params map[string]string, index int) (string,int) {
+func querySQLTxn(params map[string]interface{}, index int) (string,int) {
 	var output []string
 	//var index int
 	//index = 1
@@ -889,8 +896,7 @@ func querySQLTxn(params map[string]string, index int) (string,int) {
 	}
 	return strings.Join(output, ","), index
 }
-
-func insertSQLTxn(params map[string]string, index int ) ([]string, []string, int) {
+func insertSQLTxn(params map[string]interface{}, index int ) ([]string, []string, int) {
 	var cols, vals []string
 
 	for _, k := range sortedParamKeys(params) {
@@ -900,7 +906,6 @@ func insertSQLTxn(params map[string]string, index int ) ([]string, []string, int
 	}
 	return cols, vals, index
 }
-
 //In format -> "with d as (sql1), b as (sql2) sql3;"
 func creatingSingleCommand(i int, sql string , resources []Txn, finalStatment string)string{
 	var r *rand.Rand
@@ -927,34 +932,32 @@ func RandomString(r *rand.Rand) string {
 
 func (tx Txn) insertSql(index int ) (string, int) {
 	txt := "INSERT INTO %s (%s) VALUES (%s) "
-	cols, vals, finalINdex := insertSQLTxn(tx.Data, index)
-	stmtF := fmt.Sprintf(txt, tx.TableName, strings.Join(cols, ","), strings.Join(vals, ","))
+	cols, vals, finalINdex := insertSQLTxn(tx.data, index)
+	stmtF := fmt.Sprintf(txt, tx.tableName, strings.Join(cols, ","), strings.Join(vals, ","))
 	return stmtF, finalINdex
 }
-
 func (tx Txn) updateSql(index int) (string, int){
 	primarykey := "id"
 	txt := "UPDATE %s SET "
-	pK, _ := strconv.Atoi(tx.Id)
-	for k, v := range tx.Data {
+	pK, _ := strconv.Atoi(tx.id)
+	for k, v := range tx.data {
 		if v == "NULL" {
-			delete(tx.Data,k)
+			delete(tx.data,k)
 			txt += k +"= NULL,"
 		}
 	}
-	querySql, finalIndex := querySQLTxn(tx.Data, index)
-	stmt := fmt.Sprintf(txt+" %s", tx.TableName, querySql)
+	querySql, finalIndex := querySQLTxn(tx.data, index)
+	stmt := fmt.Sprintf(txt+" %s", tx.tableName, querySql)
 	where := fmt.Sprintf("where %s=%d", primarykey, int64(pK))
 	stmtF := fmt.Sprintf("%s %s ", stmt, where)
 	return stmtF, finalIndex
 }
-
 func (tx Txn) deleteSql(index int) (string,int) {
 	primarykey := "id"
 	txt := "DELETE FROM %s"
-	pK, _ := strconv.Atoi(tx.Id)
-	querSql, finalIndex := querySQLTxn(tx.Data, index)
-	stmt := fmt.Sprintf(txt+" %s", tx.TableName, querSql)
+	pK, _ := strconv.Atoi(tx.id)
+	querSql, finalIndex := querySQLTxn(tx.data, index)
+	stmt := fmt.Sprintf(txt+" %s", tx.tableName, querSql)
 	where := fmt.Sprintf("where %s=%d", primarykey, int64(pK))
 	stmtF := fmt.Sprintf("%s %s", stmt, where)
 	return stmtF, finalIndex
