@@ -1,4 +1,4 @@
-Query [![GoDoc](https://godoc.org/github.com/fragmenta/query?status.svg)](https://godoc.org/github.com/fragmenta/query) [![Go Report Card](https://goreportcard.com/badge/github.com/fragmenta/query)](https://goreportcard.com/report/github.com/fragmenta/query)
+Query [![GoDoc](https://godoc.org/github.com/freska/query?status.svg)](https://godoc.org/github.com/freska/query) [![Go Report Card](https://goreportcard.com/badge/github.com/freska/query)](https://goreportcard.com/report/github.com/freska/query)
 =====
 
 

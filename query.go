@@ -7,10 +7,13 @@ package query
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"math/rand"
+	"time"
 )
 
 // FIXME - this package global should in theory be protected by a mutex, even if it is only for debugging
@@ -50,6 +53,17 @@ type Query struct {
 	args []interface{}
 }
 
+type Txn struct {
+	operation string
+	tableName string
+	id string
+	data map[string]interface{}
+}
+
+func NewTxn(operation string, tableName string, id string, data map[string]interface{})Txn{
+	return Txn{operation:operation, tableName:tableName, id:id, data:data }
+
+}
 // New builds a new Query, given the table and primary key
 func New(t string, pk string) *Query {
 
@@ -170,7 +184,7 @@ func (q *Query) UpdateJoins(id int64, a []int64, b []int64) error {
 }
 
 // Insert inserts a record in the database
-func (q *Query) Insert(params map[string]string) (int64, error) {
+func (q *Query) Insert(params map[string]interface{}) (int64, error) {
 
 	// Insert and retrieve ID in one step from db
 	sql := q.insertSQL(params)
@@ -189,7 +203,7 @@ func (q *Query) Insert(params map[string]string) (int64, error) {
 
 // insertSQL sets the insert sql for update statements, turn params into sql i.e. "col"=?
 // NB we always use parameterized queries, never string values.
-func (q *Query) insertSQL(params map[string]string) string {
+func (q *Query) insertSQL(params map[string]interface{}) string {
 	var cols, vals []string
 
 	for i, k := range sortedParamKeys(params) {
@@ -202,7 +216,7 @@ func (q *Query) insertSQL(params map[string]string) string {
 }
 
 // Update one model specified in this query - the column names MUST be verified in the model
-func (q *Query) Update(params map[string]string) error {
+func (q *Query) Update(params map[string]interface{}) error {
 	// We should check the query has a where limitation to avoid updating all?
 	// pq unfortunately does not accept limit(1) here
 	return q.UpdateAll(params)
@@ -215,7 +229,7 @@ func (q *Query) Delete() error {
 }
 
 // UpdateAll updates all models specified in this relation
-func (q *Query) UpdateAll(params map[string]string) error {
+func (q *Query) UpdateAll(params map[string]interface{}) error {
 	// Create sql for update from ALL params
 	q.Select(fmt.Sprintf("UPDATE %s SET %s", q.table(), querySQL(params)))
 
@@ -380,6 +394,7 @@ func (q *Query) Results() ([]Result, error) {
 	rows, err := q.Rows()
 
 	if err != nil {
+		fmt.Println("error : ", err.Error())
 		return results, fmt.Errorf("Error querying database for rows: %s\nQUERY:%s", err, q)
 	}
 
@@ -723,7 +738,7 @@ func (q *Query) replaceArgPlaceholders() {
 
 // Sorts the param names given - map iteration order is explicitly random in Go
 // but we need params in a defined order to avoid unexpected results.
-func sortedParamKeys(params map[string]string) []string {
+func sortedParamKeys(params map[string]interface{}) []string {
 	sortedKeys := make([]string, len(params))
 	i := 0
 	for k := range params {
@@ -736,7 +751,7 @@ func sortedParamKeys(params map[string]string) []string {
 }
 
 // Generate a set of values for the params in order
-func valuesFromParams(params map[string]string) []interface{} {
+func valuesFromParams(params map[string]interface{}) []interface{} {
 
 	// NB DO NOT DEPEND ON PARAMS ORDER - see note on SortedParamKeys
 	var values []interface{}
@@ -747,7 +762,7 @@ func valuesFromParams(params map[string]string) []interface{} {
 }
 
 // Used for update statements, turn params into sql i.e. "col"=?
-func querySQL(params map[string]string) string {
+func querySQL(params map[string]interface{}) string {
 	var output []string
 	for _, k := range sortedParamKeys(params) {
 		output = append(output, fmt.Sprintf("%s=?", database.QuoteField(k)))
@@ -772,6 +787,11 @@ func scanRow(cols []string, rows *sql.Rows) (Result, error) {
 		return nil, fmt.Errorf("Error scanning row: %s", err)
 	}
 
+	columnTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, fmt.Errorf("Error retrieving column types: %s", err)
+	}
+
 	// Make a string => interface map and hand off to caller
 	// We fix up a few types which the pq driver returns as less handy equivalents
 	// We enforce usage of int64 at all times as all our records use int64
@@ -786,7 +806,20 @@ func scanRow(cols []string, rows *sql.Rows) (Result, error) {
 			case int:
 				result[cols[i]] = int64(v.(int))
 			case []byte: // text cols are given as bytes
-				result[cols[i]] = string(v.([]byte))
+				if columnTypes[i].DatabaseTypeName() == "JSONB" ||
+					columnTypes[i].DatabaseTypeName() == "JSON" {
+					var data interface{}
+					err := json.Unmarshal(v.([]byte), &data)
+					if err == nil {
+						result[cols[i]] = data
+					} else {
+						return nil, fmt.Errorf("Error converting data '%s' to json: %s",
+							string(v.([]byte)),
+							err)
+					}
+				} else {
+					result[cols[i]] = string(v.([]byte))
+				}
 			case int64:
 				result[cols[i]] = v.(int64)
 			}
@@ -795,4 +828,137 @@ func scanRow(cols []string, rows *sql.Rows) (Result, error) {
 	}
 
 	return result, nil
+}
+func (q *Query) UpdateTransaction(resources []Txn) (err error) {
+
+	txn, err := database.SQLDB().Begin()
+	if err != nil{
+		return err
+	}
+	var index int
+	index = 1
+	var finalStatment string
+	finalStatment = "with "
+	var finalParams []interface{}
+
+
+	for i, resource := range resources {
+
+		var params []interface{}
+		var sql string
+
+		operation := resource.operation
+		//Generate sql comman
+		if operation == "update"{
+			sql, index = resource.updateSql(index)
+		}else if operation == "delete" {
+			sql, index = resource.deleteSql(index)
+		}else if operation == "insert" {
+			sql, index= resource.insertSql(index)
+		}
+
+
+		if len(resources)>1 {
+			finalStatment = creatingSingleCommand(i, sql, resources, finalStatment)
+		}else {
+			finalStatment = fmt.Sprintf("%s%s", sql, ";")
+		}
+		params = append(valuesFromParams(resource.data), params...)
+		finalParams =append(finalParams, params...)
+
+	}
+	_, err = txn.Exec(finalStatment, finalParams...)
+	if err != nil{
+		return transactionError(err, txn)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		return transactionError(err, txn)
+	}
+	return nil
+}
+
+//used to handle any transaction error
+func transactionError(err error,txn *sql.Tx )error{
+	txn.Rollback();
+	fmt.Println(" Error : ", err.Error())
+	return err
+}
+// Used for update statements, turn params into sql i.e. "col"=$1
+func querySQLTxn(params map[string]interface{}, index int) (string,int) {
+	var output []string
+	//var index int
+	//index = 1
+	for _, k := range sortedParamKeys(params) {
+		output = append(output, fmt.Sprintf("%s=%s%d", database.QuoteField(k),"$", index))
+		index++
+	}
+	return strings.Join(output, ","), index
+}
+func insertSQLTxn(params map[string]interface{}, index int ) ([]string, []string, int) {
+	var cols, vals []string
+
+	for _, k := range sortedParamKeys(params) {
+		cols = append(cols, database.QuoteField(k))
+		vals = append(vals, database.Placeholder(index))
+		index++
+	}
+	return cols, vals, index
+}
+//In format -> "with d as (sql1), b as (sql2) sql3;"
+func creatingSingleCommand(i int, sql string , resources []Txn, finalStatment string)string{
+	var r *rand.Rand
+	r = rand.New(rand.NewSource(time.Now().UnixNano()))
+	if i == 0{
+		step1 := RandomString(r)+" as "
+		finalStatment = fmt.Sprintf("%s %s (%s)", finalStatment, step1, sql)
+	}else if i == len(resources)-1{
+		finalStatment = fmt.Sprintf("%s %s %s",finalStatment ,sql, ";")
+	}else{
+		step1 := ", " +RandomString(r)+" as "
+		finalStatment = fmt.Sprintf("%s %s (%s)",finalStatment, step1, sql)
+	}
+	return finalStatment
+}
+func RandomString(r *rand.Rand) string {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	result := make([]byte, 3)
+	for i := range result {
+		result[i] = chars[r.Intn(len(chars))]
+	}
+	return string(result)
+}
+
+func (tx Txn) insertSql(index int ) (string, int) {
+	txt := "INSERT INTO %s (%s) VALUES (%s) "
+	cols, vals, finalINdex := insertSQLTxn(tx.data, index)
+	stmtF := fmt.Sprintf(txt, tx.tableName, strings.Join(cols, ","), strings.Join(vals, ","))
+	return stmtF, finalINdex
+}
+func (tx Txn) updateSql(index int) (string, int){
+	primarykey := "id"
+	txt := "UPDATE %s SET "
+	pK, _ := strconv.Atoi(tx.id)
+	for k, v := range tx.data {
+		if v == "NULL" {
+			delete(tx.data,k)
+			txt += k +"= NULL,"
+		}
+	}
+	querySql, finalIndex := querySQLTxn(tx.data, index)
+	stmt := fmt.Sprintf(txt+" %s", tx.tableName, querySql)
+	where := fmt.Sprintf("where %s=%d", primarykey, int64(pK))
+	stmtF := fmt.Sprintf("%s %s ", stmt, where)
+	return stmtF, finalIndex
+}
+func (tx Txn) deleteSql(index int) (string,int) {
+	primarykey := "id"
+	txt := "DELETE FROM %s"
+	pK, _ := strconv.Atoi(tx.id)
+	querSql, finalIndex := querySQLTxn(tx.data, index)
+	stmt := fmt.Sprintf(txt+" %s", tx.tableName, querSql)
+	where := fmt.Sprintf("where %s=%d", primarykey, int64(pK))
+	stmtF := fmt.Sprintf("%s %s", stmt, where)
+	return stmtF, finalIndex
 }
